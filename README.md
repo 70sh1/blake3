@@ -2,7 +2,7 @@ About this fork
 ---------
 This repo is a fork of [glycerine/blake3](https://github.com/glycerine/blake3) which is a fork of [lukechampine/blake3](https://github.com/lukechampine/blake3)
 
-The main purpose of this package is to be used in github.com/70sh1/sum, namely blake3 parallel file hashing.
+The main purpose of this package is to be used in [70sh1/sum](github.com/70sh1/sum), namely blake3 parallel file hashing.
 
 original README:
 
