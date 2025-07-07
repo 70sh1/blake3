@@ -8,7 +8,7 @@ import (
 	"io"
 	"math/bits"
 
-	"github.com/glycerine/blake3/guts"
+	"github.com/70sh1/blake3/guts"
 )
 
 func bytesToCV(b []byte) (cv [8]uint32) {

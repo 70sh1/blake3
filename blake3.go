@@ -9,8 +9,8 @@ import (
 	"math"
 	"math/bits"
 
-	"github.com/glycerine/blake3/bao"
-	"github.com/glycerine/blake3/guts"
+	"github.com/70sh1/blake3/bao"
+	"github.com/70sh1/blake3/guts"
 )
 
 // Hasher implements hash.Hash.

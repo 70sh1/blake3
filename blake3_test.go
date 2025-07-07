@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/glycerine/blake3"
+	"github.com/70sh1/blake3"
 )
 
 func toHex(data []byte) string { return hex.EncodeToString(data) }
@@ -21,7 +21,8 @@ var testVectors = func() (vecs struct {
 		KeyedHash string `json:"keyed_hash"`
 		DeriveKey string `json:"derive_key"`
 	}
-}) {
+},
+) {
 	data, err := os.ReadFile("testdata/vectors.json")
 	if err != nil {
 		panic(err)

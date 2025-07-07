@@ -5,12 +5,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	//"math/bits"
 	"os"
 	"runtime"
 	"sync"
 
-	"github.com/glycerine/blake3/guts"
+	"github.com/70sh1/blake3/guts"
 )
 
 // job delegates file hashing duties
@@ -27,21 +26,6 @@ type job struct {
 	isLast bool
 }
 
-// HashFile gives the unkeyed Blake3 512-bit hash of a file
-// using multiple parallel goroutines to read and hash.
-// See HashFile2 to control the details, or to set a key.
-//
-// We return a Hasher h that starts with our file
-// already written into it, to allow other trailing
-// meta data to be added to the hash if you wish.
-//
-// The returned 512-bit hash value in sum is ready for use; it is
-// equal to h.Sum() before any other additions.
-func HashFile(path string) (sum []byte, h *Hasher, err error) {
-	sum, h, err = HashFile2(path, nil, 0, 0)
-	return
-}
-
 // HashFile2 processes a file in parallel using
 // segments of size (1 << parallelBits) bytes.
 //
@@ -53,45 +37,13 @@ func HashFile(path string) (sum []byte, h *Hasher, err error) {
 //
 // We use runtime.NumCPU goroutines to read and hash
 // if ngoro <= 0; else we use ngoro.
-//
-// The simple call is HashFile2(path, nil, 0, 0) for
-// the defaults. See HashFile for an easy invocation.
-//
-// We return a Hasher h that starts with our file
-// already written into it, to allow other trailing
-// meta data to be added to the hash if you wish.
-//
-// The returned 512-bit hash value is ready for use; it is
-// equal to h.Sum() before any other additions.
-//
-// A note on what is not provided:
-//
-// Note that it isn't possible in general to
-// hash a second file quickly (in parallel) into the
-// returned Hasher due to alignment issues: Blake3
-// is sensitive to the exact position of each
-// byte in the stream. Thus it isn't possible
-// to implement a method such as Hasher.HashFile() and
-// have it be parallel. Hence such an
-// API is not provided; HashFile returns a new
-// Hasher but cannot do a parallel write of a file into
-// an existing, already written-to, Hasher.
-//
-// What to do instead? We recommend doing a
-// fast, parallel HashFile or HashFile2 call
-// per file, and then combining the output hashes with
-// a separate top-level Hasher to
-// enable maximum parallelism on each file.
-func HashFile2(
+
+func (h *Hasher) AddFileParallel(
 	path string,
 	key []byte,
 	parallelBits int,
 	ngoro int,
-) (sum []byte, h *Hasher, err0 error) {
-
-	// update and return at the end.
-	h = New(64, key)
-
+) error {
 	var flags uint32
 	var keyWords [8]uint32
 	if key == nil {
@@ -105,15 +57,13 @@ func HashFile2(
 
 	fd, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		err0 = err
-		return
+		return err
 	}
 	defer fd.Close()
 
 	fi, err := fd.Stat()
 	if err != nil {
-		err0 = err
-		return
+		return err
 	}
 	sz := fi.Size()
 
@@ -135,10 +85,10 @@ func HashFile2(
 		buf := make([]byte, sz)
 		_, err := io.ReadFull(fd, buf)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		h.Write(buf)
-		return h.Sum(nil), h, nil
+		return nil
 	}
 	// INVAR: sz > segment
 
@@ -192,12 +142,9 @@ func HashFile2(
 	lastSeg := make([]byte, lastSegSz)
 
 	nW := int(nWorkers)
-	for worker := 0; worker < nW; worker++ {
-
+	for worker := range nW {
 		go func(worker int) {
-			defer func() {
-				wg.Done()
-			}()
+			defer wg.Done()
 
 			f, err := os.OpenFile(path, os.O_RDONLY, 0)
 			panicOn(err)
@@ -246,14 +193,12 @@ func HashFile2(
 					return
 
 				} else {
-
-					cvs[i], _, heights[i], _, countPersHashed[i] =
-						oneCoreCV(
-							buf[worker][:lenseg],
-							uint64(job.beg/guts.ChunkSize),
-							keyWords,
-							flags,
-						)
+					cvs[i], _, heights[i], _, countPersHashed[i] = oneCoreCV(
+						buf[worker][:lenseg],
+						uint64(job.beg/guts.ChunkSize),
+						keyWords,
+						flags,
+					)
 				}
 
 			}
@@ -264,10 +209,7 @@ func HashFile2(
 	last := len(cvs) - 1
 	for i := range cvs {
 		beg := int64(i) * segment
-		endx := int64(i+1) * segment
-		if endx > sz {
-			endx = sz
-		}
+		endx := min(int64(i+1)*segment, sz)
 		if endx == beg {
 			panic("logic error: must have endx > beg. don't process empty segment")
 		}
@@ -301,8 +243,8 @@ func HashFile2(
 			h.counter += countPersHashed[j]
 		}
 	}
-	sum = h.Sum(nil)
-	return
+	// sum := h.Sum(nil)
+	return nil
 }
 
 // oneCoreCV returns the Chaining Value
@@ -326,7 +268,6 @@ func HashFile2(
 // are not keying, simply pass guts.IV and 0
 // for keyWords and flags respectively.
 func oneCoreCV(buf []byte, baseChunkCounter uint64, keyWords [8]uint32, flags uint32) (cvTop [8]uint32, topNode guts.Node, height int, chunkIndex, countPersHashed uint64) {
-
 	if len(buf) == 0 {
 		panic("len(buf) must be > 0")
 	}
@@ -381,118 +322,6 @@ func oneCoreCV(buf []byte, baseChunkCounter uint64, keyWords [8]uint32, flags ui
 		topNode = nodes[0]
 	}
 	return
-}
-
-// Sum512Parallel computes the unkeyed
-// Blake3 512-bit hash of the data in parallel
-// for speed.
-func Sum512Parallel(data []byte) []byte {
-	return Sum512Parallel2(data, 19)
-}
-
-// Sum512Parallel2 computes the unkeyed
-// Blake3 512-bit hash of the data in parallel
-// for speed. The parallelBits allows varying
-// the amount of hashing work that each goroutine
-// does.
-//
-// The data will be split into (1 << parallelBits) sized
-// segments, each processed in parallel, and the
-// resulting set of CVs (Chaining Values) will be merged
-// into the final hash.
-//
-// If parallelBits is < 14 then parallelBits = 14
-// is assumed and used, since this is the guts.MaxSIMD * guts.ChunkSize
-// amount of data that the SIMD code is optimized for.
-//
-// Setting the minimum parallelBits == 14 does
-// the most amount of work
-// in parallel, but this is typically slower overall
-// than having each goroutine process a larger
-// subset of the data at once.
-//
-// The optimal settings will depend on your local
-// hardware, and in particular on the relative bandwidth
-// and parallelism provided by your disk, memory, and CPU.
-//
-// On my hardware, somewhere between
-// parallelBits = 18 (for 256KB segments)
-// and parallelBits = 20 (for 1MB segments) appears
-// to be fastest for hashing gigabyte
-// and greater size files.
-//
-// Your mileage may vary.
-func Sum512Parallel2(data []byte, parallelBits int) []byte {
-
-	const per = guts.MaxSIMD * guts.ChunkSize
-	if parallelBits <= 0 {
-		parallelBits = 19
-	}
-	if parallelBits < 14 {
-		parallelBits = 14
-	}
-	segment := 1 << parallelBits
-	if segment < per {
-		segment = per
-	}
-
-	if len(data) <= per {
-		out := Sum512(data)
-		return out[:]
-	}
-
-	cvs := make([][8]uint32, (len(data)+segment-1)/segment)
-	nodes := make([]guts.Node, len(cvs))
-
-	var wg sync.WaitGroup
-	for i := range cvs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			beg := i * segment
-			endx := (i + 1) * segment
-			if endx > len(data) {
-				endx = len(data)
-			}
-			b := data[beg:endx]
-			cvs[i], nodes[i], _, _, _ = oneCoreCV(
-				b, uint64(beg/guts.ChunkSize), guts.IV, 0)
-		}(i)
-	}
-	wg.Wait()
-	// merge subtrees
-	numCVs := len(cvs)
-	for numCVs > 2 {
-		rem := numCVs / 2
-		for i := range cvs[:rem] {
-			parNode := guts.ParentNode(cvs[i*2], cvs[i*2+1], &guts.IV, 0)
-			cvs[i] = guts.ChainingValue(parNode)
-			nodes[i] = parNode
-		}
-		if numCVs%2 != 0 {
-			cvs[rem] = cvs[rem*2]
-			nodes[rem] = nodes[rem*2]
-			rem++
-		}
-		numCVs = rem
-	}
-
-	switch numCVs {
-	case 2:
-		par := guts.ParentNode(cvs[0], cvs[1], &guts.IV, 0)
-		par.Flags |= guts.FlagRoot // has both parent and root flags set now.
-		out := guts.WordsToBytes(guts.CompressNode(par))
-		return out[:]
-
-	case 1:
-		root := nodes[0]
-		root.Flags |= guts.FlagRoot
-		// WordsToBytes returns [64]byte
-		out := guts.WordsToBytes(guts.CompressNode(root))
-		return out[:]
-	default:
-		panic("should only be 1 or 2 nodes left after merge!")
-	}
 }
 
 func panicOn(err error) {
